@@ -1,17 +1,33 @@
 # Run: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
+import logging
 import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path as FsPath
 from typing import Annotated, List
 
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+from starlette.requests import Request
+from starlette.responses import Response
 
 from db import get_connection, init_db
+
+LOGS_DIR = FsPath(__file__).parent / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+_log_file = LOGS_DIR / f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+
+logging.basicConfig(
+    filename=str(_log_file),
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("blessed")
 
 APP_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
@@ -75,6 +91,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    body = await request.body()
+    log.info(">>> %s %s  body=%s", request.method, request.url.path, body.decode(errors="replace"))
+    response = await call_next(request)
+    chunks = [chunk async for chunk in response.body_iterator]
+    resp_body = b"".join(chunks)
+    log.info("<<< %s  body=%s", response.status_code, resp_body.decode(errors="replace"))
+    return Response(content=resp_body, status_code=response.status_code,
+                    headers=dict(response.headers), media_type=response.media_type)
 
 
 # --------------- routes ---------------
