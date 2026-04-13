@@ -1,6 +1,9 @@
-# Run: uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Run: copy .env.example to .env and set BLESSED_API_KEY, then:
+#   uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
+import hmac
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -9,13 +12,16 @@ from datetime import datetime, timezone
 from pathlib import Path as FsPath
 from typing import Annotated, List
 
-from fastapi import FastAPI, Path
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Header, HTTPException, Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from starlette.requests import Request
 from starlette.responses import Response
 
 from db import get_connection, init_db
+
+load_dotenv(FsPath(__file__).parent / ".env")
 
 LOGS_DIR = FsPath(__file__).parent / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -30,6 +36,19 @@ logging.basicConfig(
 log = logging.getLogger("blessed")
 
 APP_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def require_api_key(x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None) -> None:
+    expected = (os.environ.get("BLESSED_API_KEY") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=500, detail="BLESSED_API_KEY is not configured")
+    if x_api_key is None or len(x_api_key) != len(expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+ApiKeyDep = Annotated[None, Depends(require_api_key)]
 
 
 # --------------- models ---------------
@@ -75,6 +94,15 @@ class OutgoingMessage(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RelayMessage(BaseModel):
+    messageId: str
+    from_: str = Field(..., alias="from")
+    to: str
+    content: str
+
+    model_config = {"populate_by_name": True}
+
+
 # --------------- app ---------------
 
 @asynccontextmanager
@@ -111,7 +139,7 @@ AppId = Annotated[str, Path(pattern=r"^[0-9a-fA-F]{8}$")]
 
 
 @app.post("/message")
-def post_message(msg: IncomingMessage):
+def post_message(msg: IncomingMessage, _: ApiKeyDep):
     now_ms = int(time.time() * 1000)
     try:
         with get_connection() as conn:
@@ -126,7 +154,7 @@ def post_message(msg: IncomingMessage):
 
 
 @app.get("/messages/{app_id}", response_model=List[OutgoingMessage])
-def get_messages(app_id: AppId):
+def get_messages(app_id: AppId, _: ApiKeyDep):
     app_id = app_id.lower()
     with get_connection() as conn:
         rows = conn.execute(
@@ -153,3 +181,28 @@ def get_messages(app_id: AppId):
         )
         for row in rows
     ]
+
+
+@app.get("/relay-pending", response_model=List[RelayMessage])
+def relay_pending(_: ApiKeyDep):
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT message_id, from_app_id, to_app_id, content "
+            "FROM messages WHERE delivered = 0",
+        ).fetchall()
+    return [
+        RelayMessage(
+            messageId=row["message_id"],
+            **{"from": row["from_app_id"]},
+            to=row["to_app_id"],
+            content=row["content"],
+        )
+        for row in rows
+    ]
+
+
+@app.post("/relay-confirm/{message_id}")
+def relay_confirm(message_id: str, _: ApiKeyDep):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM messages WHERE message_id = ?", (message_id,))
+    return {"ok": True}
