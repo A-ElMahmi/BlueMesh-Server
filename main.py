@@ -1,4 +1,4 @@
-# Run: copy .env.example to .env and set BLESSED_API_KEY, then:
+# Run: copy .env.example to .env and set BLUEMESH_API_KEY, then:
 #   uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 import hmac
@@ -33,15 +33,15 @@ logging.basicConfig(
     format="%(asctime)s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log = logging.getLogger("blessed")
+log = logging.getLogger("bluemesh")
 
 APP_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 def require_api_key(x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None) -> None:
-    expected = (os.environ.get("BLESSED_API_KEY") or "").strip()
+    expected = (os.environ.get("BLUEMESH_API_KEY") or "").strip()
     if not expected:
-        raise HTTPException(status_code=500, detail="BLESSED_API_KEY is not configured")
+        raise HTTPException(status_code=500, detail="BLUEMESH_API_KEY is not configured")
     if x_api_key is None or len(x_api_key) != len(expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not hmac.compare_digest(x_api_key.encode(), expected.encode()):
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Blessed Message Gateway", lifespan=lifespan)
+app = FastAPI(title="BlueMesh Server", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "blessed.db"
+DB_PATH = Path(__file__).parent / "bluemesh.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
